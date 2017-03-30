@@ -1,0 +1,18 @@
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: reboot-agent
+spec:
+  template:
+    spec:
+      containers:
+      - name: reboot-agent
+        image: TBD
+        command:
+        - ./reboot-agent --v=4
+        - --v=4
+        env:
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName

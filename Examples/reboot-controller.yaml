@@ -1,0 +1,14 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: reboot-controller
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+      - name: reboot-controller
+        image: TBD
+        command:
+        - ./reboot-controller
+        - --v=4

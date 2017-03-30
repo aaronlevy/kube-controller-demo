@@ -15,3 +15,14 @@ This example is currently based off client-go v2.0.0 - but will be updated as ne
 - Demonstrate using work-queues
 - Demonstrate using Third Party Resources
 - Demonstrate using Shared Informers
+
+# Building
+
+Build agent and controller binaries:
+
+`make clean all`
+
+Build agent and controller Docker images:
+
+`make clean images`
+
