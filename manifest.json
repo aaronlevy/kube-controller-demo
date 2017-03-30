@@ -1,0 +1,10 @@
+{
+    "dependencies": {
+        "github.com/emicklei/go-restful": {
+            "version": "v1.2"
+        },
+        "k8s.io/client-go": {
+            "version": "v2.0.0"
+        }
+    }
+}
