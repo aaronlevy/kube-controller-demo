@@ -5,12 +5,12 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/pkg/api"
 	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/runtime"
-	"k8s.io/client-go/pkg/util/wait"
-	"k8s.io/client-go/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/aaronlevy/kube-controller-demo/common"
@@ -48,7 +48,7 @@ func main() {
 type rebootController struct {
 	client     kubernetes.Interface
 	nodeLister storeToNodeLister
-	controller cache.ControllerInterface
+	controller cache.Controller
 }
 
 func newRebootController(client kubernetes.Interface) *rebootController {
@@ -58,18 +58,13 @@ func newRebootController(client kubernetes.Interface) *rebootController {
 
 	store, controller := cache.NewInformer(
 		&cache.ListWatch{
-			ListFunc: func(alo api.ListOptions) (runtime.Object, error) {
-				var lo v1.ListOptions
-				v1.Convert_api_ListOptions_To_v1_ListOptions(&alo, &lo, nil)
-
+			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
 				// We do not add any selectors because we want to watch all nodes.
 				// This is so we can determine the total count of "unavailable" nodes.
 				// However, this could also be implemented using multiple informers (or better, shared-informers)
 				return client.Core().Nodes().List(lo)
 			},
-			WatchFunc: func(alo api.ListOptions) (watch.Interface, error) {
-				var lo v1.ListOptions
-				v1.Convert_api_ListOptions_To_v1_ListOptions(&alo, &lo, nil)
+			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
 				return client.Core().Nodes().Watch(lo)
 			},
 		},

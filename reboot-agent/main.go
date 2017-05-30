@@ -7,13 +7,13 @@ import (
 
 	"github.com/coreos/go-systemd/login1"
 	"github.com/golang/glog"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/pkg/api"
 	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/fields"
-	"k8s.io/client-go/pkg/runtime"
-	"k8s.io/client-go/pkg/util/wait"
-	"k8s.io/client-go/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/aaronlevy/kube-controller-demo/common"
@@ -65,7 +65,7 @@ func main() {
 type rebootAgent struct {
 	client     kubernetes.Interface
 	dbusConn   *login1.Conn
-	controller cache.ControllerInterface
+	controller cache.Controller
 }
 
 func newRebootAgent(nodeName string, client kubernetes.Interface, dbusConn *login1.Conn) *rebootAgent {
@@ -75,25 +75,19 @@ func newRebootAgent(nodeName string, client kubernetes.Interface, dbusConn *logi
 	}
 
 	// We only care about updates to "self" so create a field selector based on the current node name
-	nodeNameFS := fields.OneTermEqualSelector("metadata.name", nodeName)
+	nodeNameFS := fields.OneTermEqualSelector("metadata.name", nodeName).String()
 
 	// We do not need the cache store of the informer. In this case we just want the controller event handlers.
 	_, controller := cache.NewInformer(
 		&cache.ListWatch{
-			ListFunc: func(alo api.ListOptions) (runtime.Object, error) {
-				var lo v1.ListOptions
-				v1.Convert_api_ListOptions_To_v1_ListOptions(&alo, &lo, nil)
-
+			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
 				// Add the field selector containgin our node name to our list options
-				lo.FieldSelector = nodeNameFS.String()
+				lo.FieldSelector = nodeNameFS
 				return client.Core().Nodes().List(lo)
 			},
-			WatchFunc: func(alo api.ListOptions) (watch.Interface, error) {
-				var lo v1.ListOptions
-				v1.Convert_api_ListOptions_To_v1_ListOptions(&alo, &lo, nil)
-
+			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
 				// Add the field selector containgin our node name to our list options
-				lo.FieldSelector = nodeNameFS.String()
+				lo.FieldSelector = nodeNameFS
 				return client.Core().Nodes().Watch(lo)
 			},
 		},
