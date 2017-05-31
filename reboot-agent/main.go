@@ -58,6 +58,11 @@ func main() {
 
 	agent := newRebootAgent(nodeName, client, dbusConn)
 
+	// We immediately start processing events even if our cache might not have fully synced.
+	// In this case this is safe because we only care about a single object - our own node.
+	// If we get an event for "self" that is the only state we need, and no further cache syncing
+	// is required. If we do start caring about cache state, we should implement a workqueue
+	// and wait to process queue until cached has synced. See reboot-controller for example.
 	glog.Info("Starting Reboot Agent")
 	agent.controller.Run(wait.NeverStop)
 }

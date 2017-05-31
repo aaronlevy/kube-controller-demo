@@ -2,18 +2,21 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"time"
 
+	"github.com/aaronlevy/kube-controller-demo/common"
 	"github.com/golang/glog"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	lister_v1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
-
-	"github.com/aaronlevy/kube-controller-demo/common"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // TODO(aaron): make configurable and add MinAvailable
@@ -41,30 +44,34 @@ func main() {
 		glog.Fatalf("Failed to create kubernetes client: %v", err)
 	}
 
-	glog.Infof("Starting reboot controller")
-	newRebootController(client).controller.Run(wait.NeverStop)
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
+	newRebootController(client).Run(stopCh)
 }
 
 type rebootController struct {
 	client     kubernetes.Interface
-	nodeLister storeToNodeLister
-	controller cache.Controller
+	nodeLister lister_v1.NodeLister
+	informer   cache.Controller
+	queue      workqueue.RateLimitingInterface
 }
 
 func newRebootController(client kubernetes.Interface) *rebootController {
 	rc := &rebootController{
 		client: client,
+		queue:  workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 	}
 
-	store, controller := cache.NewInformer(
+	indexer, informer := cache.NewIndexerInformer(
 		&cache.ListWatch{
-			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
+			ListFunc: func(lo meta_v1.ListOptions) (runtime.Object, error) {
 				// We do not add any selectors because we want to watch all nodes.
 				// This is so we can determine the total count of "unavailable" nodes.
 				// However, this could also be implemented using multiple informers (or better, shared-informers)
 				return client.Core().Nodes().List(lo)
 			},
-			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(lo meta_v1.ListOptions) (watch.Interface, error) {
 				return client.Core().Nodes().Watch(lo)
 			},
 		},
@@ -77,70 +84,144 @@ func newRebootController(client kubernetes.Interface) *rebootController {
 		10*time.Second,
 		// Callback Functions to trigger on add/update/delete
 		cache.ResourceEventHandlerFuncs{
-			AddFunc:    rc.handler,
-			UpdateFunc: func(old, new interface{}) { rc.handler(new) },
-			DeleteFunc: rc.handler,
+			AddFunc: func(obj interface{}) {
+				if key, err := cache.MetaNamespaceKeyFunc(obj); err == nil {
+					rc.queue.Add(key)
+				}
+			},
+			UpdateFunc: func(old, new interface{}) {
+				if key, err := cache.MetaNamespaceKeyFunc(new); err == nil {
+					rc.queue.Add(key)
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				if key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err == nil {
+					rc.queue.Add(key)
+				}
+			},
 		},
+		cache.Indexers{},
 	)
 
-	rc.controller = controller
-	// Convert the cache.Store to a nodeLister to avoid some boilerplate (e.g. convert runtime.Objects to *v1.Nodes)
-	// TODO(aaron): use upstream cache.StoreToNodeLister once v3.0.0 client-go available
-	rc.nodeLister = storeToNodeLister{store}
+	rc.informer = informer
+	// NodeLister avoids some boilerplate code (e.g. convert runtime.Object to *v1.node)
+	rc.nodeLister = lister_v1.NewNodeLister(indexer)
 
 	return rc
 }
 
-func (c *rebootController) handler(obj interface{}) {
-	// TODO(aaron): This would be better handled using a workqueue. This will be added to client-go during v1.6.x release.
-	//   As we process objects, add to queue for processing, rather than potentially rebooting whichver node checked in last.
-	//   A good example of this pattern is shown in: https://github.com/kubernetes/community/blob/master/contributors/devel/controllers.md
-	//   We could also protect against operating against a partial cache by not starting processing until cached synced.
+func (c *rebootController) Run(stopCh chan struct{}) {
+	defer c.queue.ShutDown()
+	glog.Info("Starting RebootController")
 
-	node := obj.(*v1.Node)
-	glog.V(4).Infof("Received update of node: %s", node.Name)
+	go c.informer.Run(stopCh)
+
+	// Wait for all caches to be synced, before processing items from the queue is started
+	if !cache.WaitForCacheSync(stopCh, c.informer.HasSynced) {
+		glog.Error(fmt.Errorf("Timed out waiting for caches to sync"))
+		return
+	}
+
+	// Launching additional goroutines would parallelize workers consuming from the queue (but we don't really need this)
+	go wait.Until(c.runWorker, time.Second, stopCh)
+
+	<-stopCh
+	glog.Info("Stopping Reboot Controller")
+}
+
+func (c *rebootController) runWorker() {
+	for c.processNext() {
+	}
+}
+
+func (c *rebootController) processNext() bool {
+	// Wait until there is a new item in the working queue
+	key, quit := c.queue.Get()
+	if quit {
+		return false
+	}
+	// Tell the queue that we are done with processing this key. This unblocks the key for other workers
+	// This allows safe parallel processing because two pods with the same key are never processed in
+	// parallel.
+	defer c.queue.Done(key)
+	// Invoke the method containing the business logic
+	err := c.process(key.(string))
+	// Handle the error if something went wrong during the execution of the business logic
+	c.handleErr(err, key)
+	return true
+}
+
+func (c *rebootController) process(key string) error {
+	node, err := c.nodeLister.Get(key)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve node by key %q: %v", key, err)
+	}
+
+	glog.V(4).Infof("Received update of node: %s", node.GetName())
 	if node.Annotations == nil {
-		return // If node has no annotations, then it doesn't need a reboot
+		return nil // If node has no annotations, then it doesn't need a reboot
 	}
 
 	if _, ok := node.Annotations[common.RebootNeededAnnotation]; !ok {
-		return // Node does not need reboot
+		return nil // Node does not need reboot
 	}
 
 	// Determine if we should reboot based on maximum number of unavailable nodes
 	unavailable, err := c.unavailableNodeCount()
 	if err != nil {
-		glog.Errorf("Failed to determine number of unavailable nodes: %v", err)
-		return
+		return fmt.Errorf("Failed to determine number of unavailable nodes: %v", err)
 	}
 
 	if unavailable >= maxUnavailable {
-		glog.Infof("Too many nodes unvailable (%d/%d). Skipping reboot of %s", unavailable, maxUnavailable, node.Name)
-		return
+		// TODO(aaron): We might want this case to retry indefinitely. Could create a specific error an check in handleErr()
+		return fmt.Errorf("Too many nodes unvailable (%d/%d). Skipping reboot of %s", unavailable, maxUnavailable, node.Name)
 	}
 
 	// We should not modify the cache object directly, so we make a copy first
 	nodeCopy, err := common.CopyObjToNode(node)
 	if err != nil {
-		glog.Errorf("Failed to make copy of node: %v", err)
-		return
+		return fmt.Errorf("Failed to make copy of node: %v", err)
 	}
 
 	glog.Infof("Marking node %s for reboot", node.Name)
 	nodeCopy.Annotations[common.RebootAnnotation] = ""
 	if _, err := c.client.Core().Nodes().Update(nodeCopy); err != nil {
-		glog.Errorf("Failed to set %s annotation: %v", common.RebootAnnotation, err)
+		return fmt.Errorf("Failed to set %s annotation: %v", common.RebootAnnotation, err)
 	}
+	return nil
+}
+
+func (c *rebootController) handleErr(err error, key interface{}) {
+	if err == nil {
+		// Forget about the #AddRateLimited history of the key on every successful synchronization.
+		// This ensures that future processing of updates for this key is not delayed because of
+		// an outdated error history.
+		c.queue.Forget(key)
+		return
+	}
+
+	// This controller retries 5 times if something goes wrong. After that, it stops trying.
+	if c.queue.NumRequeues(key) < 5 {
+		glog.Infof("Error processing node %v: %v", key, err)
+
+		// Re-enqueue the key rate limited. Based on the rate limiter on the
+		// queue and the re-enqueue history, the key will be processed later again.
+		c.queue.AddRateLimited(key)
+		return
+	}
+
+	c.queue.Forget(key)
+	glog.Errorf("Dropping node %q out of the queue: %v", key, err)
 }
 
 func (c *rebootController) unavailableNodeCount() (int, error) {
-	nodes, err := c.nodeLister.List()
+	nodes, err := c.nodeLister.List(labels.Everything())
 	if err != nil {
 		return 0, err
 	}
 	var unavailable int
-	for _, n := range nodes.Items {
-		if nodeIsRebooting(&n) {
+	for _, n := range nodes {
+		if nodeIsRebooting(n) {
 			unavailable++
 			continue
 		}
@@ -164,16 +245,4 @@ func nodeIsRebooting(n *v1.Node) bool {
 	// Check if node is already marked for immediate reboot
 	_, ok := n.Annotations[common.RebootAnnotation]
 	return ok
-}
-
-// The current client-go StoreToNodeLister expects api.Node - but client returns v1.Node. Add this shim until next release
-type storeToNodeLister struct {
-	cache.Store
-}
-
-func (s *storeToNodeLister) List() (machines v1.NodeList, err error) {
-	for _, m := range s.Store.List() {
-		machines.Items = append(machines.Items, *(m.(*v1.Node)))
-	}
-	return machines, nil
 }
