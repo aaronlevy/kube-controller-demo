@@ -6,30 +6,33 @@ The goal of this project is to demonstrate how you can build a simple Kubernetes
 
 This is not meant as a project to be used directly - but rather as a reference point to build your own custom controllers.
 
-This example is currently based off client-go v2.0.0 - but will be updated as new versions become available.
+This example is currently based off client-go v3.0.0-beta.0 - but will be updated as new versions become available.
 
 ## Helpful Resources
 
-- github.com/kubernetes/community
-    - contributors/devel/controllers.md
-    - contributors/design-proposals/principles.md#control-logic
+- Upstream controller development and design principles
+    - https://github.com/kubernetes/community/blob/master/contributors/devel/controllers.md
+    - https://github.com/kubernetes/community/blob/master/contributors/design-proposals/principles.md#control-logic
 
-- github.com/kubernetes/kubernetes
-    - pkg/controller
+- Upstream Kubernetes controller package
+    - https://github.com/kubernetes/kubernetes/tree/release-1.6/pkg/controller
 
-- github.com/kubernetes/client-go
-    - examples/  (Note: examples are version sensitive)
+- client-go examples (version sensitive, e.g. use v3 examples with v3 checkout)
+    - https://github.com/kubernetes/client-go/tree/v3.0.0-beta.0/examples
 
-- github.com/kbst/memcached
-    - Operator written in Python
+- Creating Kubernetes Operators Presentation (@metral)
+    - http://bit.ly/lax-k8s-operator
+
+- Memcached operator written in python (@pst)
+    - https://github.com/kbst/memcached
 
 ## Roadmap
 
-- Update to client-go v3.0.0 (when available)
-- Demonstrate using leader-election
-- Demonstrate using work-queues
-- Demonstrate using Third Party Resources
-- Demonstrate using Shared Informers
+- Demonstrate using
+    - leader-election
+    - Third Party Resources
+    - Shared Informers
+    - Events
 
 ## Building
 
