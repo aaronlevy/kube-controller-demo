@@ -16,8 +16,10 @@ check:
 	@go vet $(shell go list ./... | grep -v '/vendor/')
 	@go test -v $(shell go list ./... | grep -v '/vendor/')
 
+.PHONY: vendor
 vendor:
-	dep ensure
+	glide update --strip-vendor
+	glide-vc
 
 clean:
 	rm -rf bin

@@ -1,0 +1,8 @@
+package: github.com/aaronlevy/kube-controller-demo
+import:
+- package: k8s.io/client-go
+  version: v7.0.0
+- package: k8s.io/apimachinery
+  version: 302974c03f7e50f16561ba237db776ab93594ef6
+  package: k8s.io/api
+  version: 73d903622b7391f3312dcbac6483fed484e185f8
